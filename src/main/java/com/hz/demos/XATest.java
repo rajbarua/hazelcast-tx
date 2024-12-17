@@ -36,13 +36,31 @@ class XATest {
                     "CREATE TABLE customer_one (id INT PRIMARY KEY, name VARCHAR(255), uniqueId INT UNIQUE)");
         }
         HazelcastInstance hzClient = txTest.getHzClient();
-
+        //The first customer should be inserted succesfully
         txTest.testTx(hzClient, pgXADataSource, firstCustomer);
 
         if (txTest.validatePresent(hzClient, firstCustomer)) {
-            System.out.println("Transaction was successful");
+            System.out.println("First test was successful");
         } else {
-            System.out.println("Transaction failed");
+            System.out.println("First test failed");
+        }
+
+        //The second customer insertion should fail due to unique constraint violation in the database
+        var secondCustomer = new Customer(2, "name", 1);
+        txTest.testTx(hzClient, pgXADataSource, secondCustomer);
+        if (txTest.validatePresent(hzClient, secondCustomer)) {
+            System.out.println("Second test failed");
+        } else {
+            System.out.println("Second test was successful");
+        }
+
+        //The second customer insertion should fail due to unique constraint violation in the database
+        var thridCustomer = new Customer(3, "name", 3);
+        txTest.testTx(hzClient, pgXADataSource, thridCustomer);
+        if (txTest.validatePresent(hzClient, thridCustomer)) {
+            System.out.println("Third test was successful");
+        } else {
+            System.out.println("Third test failed");
         }
         hzClient.shutdown();
     }
