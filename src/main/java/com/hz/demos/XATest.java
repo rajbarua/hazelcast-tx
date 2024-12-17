@@ -6,7 +6,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.Properties;
 
 import javax.sql.XAConnection;
 import javax.sql.XADataSource;
@@ -15,7 +14,6 @@ import javax.transaction.xa.XAResource;
 
 import org.postgresql.xa.PGXADataSource;
 
-import com.atomikos.icatch.jta.UserTransactionImp;
 import com.atomikos.icatch.jta.UserTransactionManager;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.client.config.ClientConfig;
@@ -49,6 +47,47 @@ class XATest {
         hzClient.shutdown();
     }
 
+    private void testTx(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer)
+            throws Exception {
+        // I am using atomikos but you can use any other JTA provider
+        cleanAtomikosLogs();
+        UserTransactionManager tm = new UserTransactionManager();
+        tm.begin();
+
+        Transaction transaction = tm.getTransaction();
+
+        HazelcastXAResource xaResource = hzClient.getXAResource();
+        XAConnection pgXAConnection = pgXADataSource.getXAConnection();
+        XAResource pgXAResource = pgXAConnection.getXAResource();
+        transaction.enlistResource(pgXAResource);
+        transaction.enlistResource(xaResource);
+        boolean rollback = false;
+        try (Connection connection = pgXAConnection.getConnection()) {
+            connection.setAutoCommit(false);
+            TransactionContext context = xaResource.getTransactionContext();
+            context.getMap(MAP_NAME).put(customer.id(), customer);
+            executeStatement(connection, false,
+                    "INSERT INTO customer_one (id, name, uniqueId) VALUES (?, ?, ?)", customer.id(), customer.name(),
+                    customer.uniqueId());
+            // if(true)
+            //     throw new RuntimeException("Simulating a failure");
+            transaction.delistResource(xaResource, XAResource.TMSUCCESS);
+            transaction.delistResource(pgXAResource, XAResource.TMSUCCESS);
+            tm.commit();
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+            rollback = true;
+        } finally {
+            if (rollback) {
+                try {
+                    tm.rollback();
+                } catch (Exception rollbackException) {
+                    System.out.println("Error during rollback: " + rollbackException.getMessage());
+                }
+            }
+        }
+        cleanAtomikosLogs();
+    }
     private boolean validatePresent(HazelcastInstance hzClient, Customer customer) {
         boolean present = false;
         // also check if the data is present in the database
@@ -73,47 +112,6 @@ class XATest {
         clientConfig.getNetworkConfig().addAddress("localhost:5701");
         return HazelcastClient.newHazelcastClient(clientConfig);
     }
-
-    private void testTx(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer)
-            throws Exception {
-        // I am using atomikos but you can use any other JTA provider
-        cleanAtomikosLogs();
-        UserTransactionManager tm = new UserTransactionManager();
-        tm.begin();
-
-        Transaction transaction = tm.getTransaction();
-
-        HazelcastXAResource xaResource = hzClient.getXAResource();
-        XAConnection pgXAConnection = pgXADataSource.getXAConnection();
-        XAResource pgXAResource = pgXAConnection.getXAResource();
-        transaction.enlistResource(pgXAResource);
-        transaction.enlistResource(xaResource);
-        boolean rollback = false;
-        try (Connection connection = pgXAConnection.getConnection()) {
-            connection.setAutoCommit(false);
-            TransactionContext context = xaResource.getTransactionContext();
-            context.getMap(MAP_NAME).put(customer.id(), customer);
-            executeStatement(connection, false,
-                    "INSERT INTO customer_one (id, name, uniqueId) VALUES (?, ?, ?)", customer.id(), customer.name(),
-                    customer.uniqueId());
-            transaction.delistResource(xaResource, XAResource.TMSUCCESS);
-            transaction.delistResource(pgXAResource, XAResource.TMSUCCESS);
-            tm.commit();
-        } catch (Exception e) {
-            System.out.println(e.getMessage());
-            rollback = true;
-        } finally {
-            if (rollback) {
-                try {
-                    tm.rollback();
-                } catch (Exception rollbackException) {
-                    System.out.println("Error during rollback: " + rollbackException.getMessage());
-                }
-            }
-        }
-        cleanAtomikosLogs();
-    }
-
     private XADataSource getXADataSource() {
         PGXADataSource factory = new PGXADataSource();
         factory.setUrl("jdbc:postgresql://localhost:5432/hazelcast");
