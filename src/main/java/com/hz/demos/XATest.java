@@ -28,41 +28,28 @@ class XATest {
 
     public static void main(String[] args) throws Exception {
         XATest txTest = new XATest();
-        var firstCustomer = new Customer(1, "name", 1);
-        // create database schema
         XADataSource pgXADataSource = txTest.getXADataSource();
         try (Connection connection = pgXADataSource.getXAConnection().getConnection()) {
             txTest.executeStatement(connection, true,
                     "CREATE TABLE customer_one (id INT PRIMARY KEY, name VARCHAR(255), uniqueId INT UNIQUE)");
         }
         HazelcastInstance hzClient = txTest.getHzClient();
-        //The first customer should be inserted succesfully
-        txTest.testTx(hzClient, pgXADataSource, firstCustomer);
 
-        if (txTest.validatePresent(hzClient, firstCustomer)) {
-            System.out.println("First test was successful");
-        } else {
-            System.out.println("First test failed");
-        }
+        txTest.runTest(hzClient, pgXADataSource, new Customer(1, "name", 1), "First test", true);
+        txTest.runTest(hzClient, pgXADataSource, new Customer(2, "name", 1), "Second test", false);
+        txTest.runTest(hzClient, pgXADataSource, new Customer(3, "name", 3), "Third test", true);
 
-        //The second customer insertion should fail due to unique constraint violation in the database
-        var secondCustomer = new Customer(2, "name", 1);
-        txTest.testTx(hzClient, pgXADataSource, secondCustomer);
-        if (txTest.validatePresent(hzClient, secondCustomer)) {
-            System.out.println("Second test failed");
-        } else {
-            System.out.println("Second test was successful");
-        }
-
-        //The second customer insertion should fail due to unique constraint violation in the database
-        var thridCustomer = new Customer(3, "name", 3);
-        txTest.testTx(hzClient, pgXADataSource, thridCustomer);
-        if (txTest.validatePresent(hzClient, thridCustomer)) {
-            System.out.println("Third test was successful");
-        } else {
-            System.out.println("Third test failed");
-        }
         hzClient.shutdown();
+    }
+
+    private void runTest(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer, String testName, boolean shouldInsert) throws Exception {
+        testTx(hzClient, pgXADataSource, customer);
+        boolean isInserted = isInserted(hzClient, customer);
+        if (isInserted == shouldInsert) {
+            System.out.println(testName + " was successful");
+        } else {
+            System.out.println(testName + " failed");
+        }
     }
 
     private void testTx(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer)
@@ -106,7 +93,7 @@ class XATest {
         }
         cleanAtomikosLogs();
     }
-    private boolean validatePresent(HazelcastInstance hzClient, Customer customer) {
+    private boolean isInserted(HazelcastInstance hzClient, Customer customer) {
         boolean present = false;
         // also check if the data is present in the database
         try {
