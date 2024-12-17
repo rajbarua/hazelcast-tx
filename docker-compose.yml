@@ -1,0 +1,25 @@
+services:
+  hz:
+    image: docker.io/hazelcast/hazelcast-enterprise:5.5.2
+    ports:
+      - "5701:5701"
+    environment:
+      HZ_CLUSTERNAME: dev
+      # set HZ_LICENSEKEY in the environment with a command like: export HZ_LICENSEKEY=$(cat ~/hazelcast/demo.license)
+      HZ_LICENSEKEY: ${HZ_LICENSEKEY}
+  hz-mc:
+    image: hazelcast/management-center:latest-snapshot
+    ports:
+      - "8080:8080"
+    depends_on:
+      - hz
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: hazelcast
+      POSTGRES_PASSWORD: hazelcast
+      POSTGRES_DB: hazelcast
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgresql.conf:/var/lib/postgresql/data/postgresql.conf
