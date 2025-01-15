@@ -3,8 +3,6 @@ package com.hz.demos;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
 import java.sql.Statement;
 
 import javax.sql.XAConnection;
@@ -12,37 +10,50 @@ import javax.sql.XADataSource;
 import javax.transaction.Transaction;
 import javax.transaction.xa.XAResource;
 
-import org.postgresql.xa.PGXADataSource;
-
 import com.atomikos.icatch.jta.UserTransactionManager;
-import com.hazelcast.client.HazelcastClient;
-import com.hazelcast.client.config.ClientConfig;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.map.IMap;
 import com.hazelcast.transaction.HazelcastXAResource;
 import com.hazelcast.transaction.TransactionContext;
+import com.hz.demos.domain.Customer;
 
 class XATest {
     public static String MAP_NAME = "amap";
-    public static long FIRST_KEY = 1;
-    public static long SECOND_KEY = 2;
+    public static String ANOTHER_MAP_NAME = "anothermap";
+    public static String UNIQUE_ID_MAP = "uniqueIdMap";
 
     public static void main(String[] args) throws Exception {
+        boolean usePutIfAbsent = false;
         XATest txTest = new XATest();
-        XADataSource pgXADataSource = txTest.getXADataSource();
-        try (Connection connection = pgXADataSource.getXAConnection().getConnection()) {
-            txTest.executeStatement(connection, true,
-                    "CREATE TABLE customer_one (id INT PRIMARY KEY, name VARCHAR(255), uniqueId INT UNIQUE)");
-        }
-        HazelcastInstance hzClient = txTest.getHzClient();
+        HazelcastInstance hzClient = Common.getHzClient();
+        XADataSource pgXADataSource = Common.getXADataSource("localhost");
 
-        txTest.runTest(hzClient, pgXADataSource, new Customer(1, "name", 1), "First test", true);
-        txTest.runTest(hzClient, pgXADataSource, new Customer(2, "name", 1), "Second test", false);
-        txTest.runTest(hzClient, pgXADataSource, new Customer(3, "name", 3), "Third test", true);
+        Common.cleanup(pgXADataSource, hzClient);
+        Common.createTable(pgXADataSource);
+        
+
+        txTest.runTest(hzClient, pgXADataSource, new Customer(1, "name", 1), "First test", true, usePutIfAbsent);
+        txTest.runTest(hzClient, pgXADataSource, new Customer(2, "name", 2), "Second test", false, usePutIfAbsent);
+        txTest.runTest(hzClient, pgXADataSource, new Customer(3, "anothername", 1), "Third test", true, usePutIfAbsent);
 
         hzClient.shutdown();
     }
 
-    private void runTest(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer, String testName, boolean shouldInsert) throws Exception {
+    private void runTest(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer, String testName, boolean shouldInsert, boolean usePutIfAbsent) 
+    throws Exception {
+        // if(usePutIfAbsent) {
+        IMap<Long, Long> uniqueIdMap = hzClient.getMap(UNIQUE_ID_MAP);
+        Long id = uniqueIdMap.putIfAbsent(customer.getUniqueId(), customer.getId());
+        if(id != null && id == customer.getId()) {
+            //this is an update and should be allowed
+        }else if(id != null && id != customer.getId()) {
+            //this is an insert and should be stopped
+            return;
+        }else{//id is null
+            //this is an insert and should be allowed
+        }
+            
+        // }
         testTx(hzClient, pgXADataSource, customer);
         boolean isInserted = isInserted(hzClient, customer);
         if (isInserted == shouldInsert) {
@@ -70,10 +81,11 @@ class XATest {
         try (Connection connection = pgXAConnection.getConnection()) {
             connection.setAutoCommit(false);
             TransactionContext context = xaResource.getTransactionContext();
-            context.getMap(MAP_NAME).put(customer.id(), customer);
-            executeStatement(connection, false,
-                    "INSERT INTO customer_one (id, name, uniqueId) VALUES (?, ?, ?)", customer.id(), customer.name(),
-                    customer.uniqueId());
+            context.getMap(MAP_NAME).put(customer.getId(), customer);//insert to first map
+            context.getMap(ANOTHER_MAP_NAME).put(customer.getId(), customer);//insert to second map
+            Common.executeStatement(connection, false,
+                    "INSERT INTO customer_one (id, name, uniqueId) VALUES (?, ?, ?)", customer.getId(), customer.getName(),
+                    customer.getUniqueId());
             // if(true)
             //     throw new RuntimeException("Simulating a failure");
             transaction.delistResource(xaResource, XAResource.TMSUCCESS);
@@ -97,52 +109,21 @@ class XATest {
         boolean present = false;
         // also check if the data is present in the database
         try {
-            Connection connection = getXADataSource().getXAConnection().getConnection();
+            Connection connection = Common.getXADataSource("localhost").getXAConnection().getConnection();
             Statement statement = connection.createStatement();
-            var resultSet = statement.executeQuery("SELECT * FROM customer_one WHERE id = " + customer.id());
+            var resultSet = statement.executeQuery("SELECT * FROM customer_one WHERE id = " + customer.getId());
             if (resultSet.next()) {
-                present = resultSet.getInt("id") == customer.id() && resultSet.getString("name").equals(customer.name())
-                        && resultSet.getInt("uniqueId") == customer.uniqueId();
+                present = resultSet.getInt("id") == customer.getId() && resultSet.getString("name").equals(customer.getName())
+                        && resultSet.getInt("uniqueId") == customer.getUniqueId();
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return present && hzClient.getMap(MAP_NAME).get(customer.id) != null
-                && hzClient.getMap(MAP_NAME).get(customer.id).equals(customer);
-    }
-
-    public HazelcastInstance getHzClient() {
-        ClientConfig clientConfig = new ClientConfig();
-        clientConfig.setClusterName("dev");
-        clientConfig.getNetworkConfig().addAddress("localhost:5701");
-        return HazelcastClient.newHazelcastClient(clientConfig);
-    }
-    private XADataSource getXADataSource() {
-        PGXADataSource factory = new PGXADataSource();
-        factory.setUrl("jdbc:postgresql://localhost:5432/hazelcast");
-        factory.setUser("hazelcast");
-        factory.setPassword("hazelcast");
-        factory.setDatabaseName("hazelcast");
-        return factory;
-    }
-
-    private void executeStatement(Connection connection, boolean commit, String statement, Object... params)
-            throws Exception {
-        try (PreparedStatement stmt = connection.prepareStatement(statement)) {
-            for (int i = 0; i < params.length; i++) {
-                stmt.setObject(i + 1, params[i]);
-            }
-            stmt.execute();
-        } catch (SQLException e) {
-            if (e.getSQLState().equals("42P07")) {
-                System.out.println("Table already exists");
-            } else {
-                throw e;
-            }
-        }
-    }
-
-    public record Customer(long id, String name, long uniqueId) {
+        IMap<Long, Customer> map = hzClient.getMap(MAP_NAME);
+        // IMap<Long, Customer> anotherMap = hzClient.getMap(ANOTHER_MAP_NAME);
+        return present 
+            && map.get(customer.getId()) != null && map.get(customer.getId()).getUniqueId() == customer.getUniqueId();
+            // && hzClient.getMap(ANOTHER_MAP_NAME).get(customer.getId()) != null && hzClient.getMap(ANOTHER_MAP_NAME).get(customer.getId()).equals(customer);
     }
 
     private static void cleanAtomikosLogs() {

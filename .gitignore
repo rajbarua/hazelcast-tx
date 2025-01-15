@@ -1,2 +1,4 @@
 target/
 .vscode/
+#ignore files in data folder
+data/*

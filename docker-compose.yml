@@ -1,4 +1,15 @@
 services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: hazelcast
+      POSTGRES_PASSWORD: hazelcast
+      POSTGRES_DB: hazelcast
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data:/var/lib/postgresql/data
+      - ./postgresql.conf:/var/lib/postgresql/data/postgresql.conf
   hz:
     image: docker.io/hazelcast/hazelcast-enterprise:5.5.2
     ports:
@@ -13,13 +24,36 @@ services:
       - "8080:8080"
     depends_on:
       - hz
-  postgres:
-    image: postgres:13
+  kafka:
+    image: "docker.io/apache/kafka:3.7.0"
+    hostname: kafka
+    container_name: kafka
     environment:
-      POSTGRES_USER: hazelcast
-      POSTGRES_PASSWORD: hazelcast
-      POSTGRES_DB: hazelcast
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_LOCALHOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT_LOCALHOST://localhost:9092,PLAINTEXT_HOST://kafka:9092,PLAINTEXT://kafka:9092"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:29093"
+      KAFKA_LISTENERS: "CONTROLLER://:29093,PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT://0.0.0.0:19092,PLAINTEXT_LOCALHOST://localhost:9093"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "c94cf7dd-e74a-4048-a532-7cf9dd80dbba"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_LOG_RETENTION_MS: 60000
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 5000
     ports:
-      - "5432:5432"
-    volumes:
-      - ./postgresql.conf:/var/lib/postgresql/data/postgresql.conf
+      - "9092:9092"
+      - "9093:9093"
+      - "19092:19092"
+      - "29093:29093"
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: kafka:9092
+    depends_on:
+      - kafka
+  
