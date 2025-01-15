@@ -41,19 +41,19 @@ class XATest {
 
     private void runTest(HazelcastInstance hzClient, XADataSource pgXADataSource, Customer customer, String testName, boolean shouldInsert, boolean usePutIfAbsent) 
     throws Exception {
-        // if(usePutIfAbsent) {
-        IMap<Long, Long> uniqueIdMap = hzClient.getMap(UNIQUE_ID_MAP);
-        Long id = uniqueIdMap.putIfAbsent(customer.getUniqueId(), customer.getId());
-        if(id != null && id == customer.getId()) {
-            //this is an update and should be allowed
-        }else if(id != null && id != customer.getId()) {
-            //this is an insert and should be stopped
-            return;
-        }else{//id is null
-            //this is an insert and should be allowed
-        }
+        if(usePutIfAbsent) {
+            IMap<Long, Long> uniqueIdMap = hzClient.getMap(UNIQUE_ID_MAP);
+            Long id = uniqueIdMap.putIfAbsent(customer.getUniqueId(), customer.getId());
+            if(id != null && id == customer.getId()) {
+                //this is an update and should be allowed
+            }else if(id != null && id != customer.getId()) {
+                //this is an insert and should be stopped
+                return;
+            }else{//id is null
+                //this is an insert and should be allowed
+            }
             
-        // }
+        }
         testTx(hzClient, pgXADataSource, customer);
         boolean isInserted = isInserted(hzClient, customer);
         if (isInserted == shouldInsert) {
